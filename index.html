@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>SoundMix</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="SoundMix">
+<meta name="theme-color" content="#000000">
+<style>
+:root{--bg:#000;--card:#141416;--line:#2a2a2e;--acc:#e0a050;--txt:#e8e8ea;--dim:#8a8a90}
+{box-sizing:border-box;-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none;touch-action:manipulation}
+html,body{margin:0;background:var(--bg);color:var(--txt);font-family:-apple-system,Helvetica,Arial,sans-serif;font-size:18px}
+#app{max-width:640px;margin:0 auto;padding:12px;padding-top:calc(12px + env(safe-area-inset-top));padding-bottom:calc(40px + env(safe-area-inset-bottom))}
+#status{text-align:center;font-size:24px;font-weight:600;color:var(--acc);padding:14px 4px;min-height:60px}
+#go{display:block;width:100%;height:110px;border:0;border-radius:24px;background:var(--acc);color:#000;font-size:36px;font-weight:800;letter-spacing:3px;margin-bottom:14px}
+#go.run{background:#8c2f2f;color:#fff}
+.card{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:16px;margin-bottom:14px}
+.row{display:flex;align-items:center;justify-content:space-between}
+h2{margin:0 0 6px;font-size:20px;font-weight:700}
+h2 b,label b{color:var(--acc);font-weight:600;margin-left:6px}
+label{display:block;color:var(--dim);font-size:16px;margin-top:10px}
+.chips{display:flex;flex-wrap:wrap;margin:6px -4px 4px}
+.chips button{flex:1 1 28%;margin:4px;min-height:58px;border-radius:14px;border:2px solid var(--line);background:#1d1d20;color:var(--txt);font-size:18px;font-weight:600}
+.chips button.sel{background:var(--acc);border-color:var(--acc);color:#000}
+.sw{min-width:96px;height:54px;border-radius:27px;border:2px solid var(--line);background:#1d1d20;color:var(--dim);font-size:18px;font-weight:800}
+.sw.on{background:var(--acc);border-color:var(--acc);color:#000}
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:48px;background:transparent;margin:4px 0}
+input[type=range]::-webkit-slider-runnable-track{height:14px;border-radius:7px;background:#34343a}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:46px;height:46px;border-radius:50%;background:var(--acc);border:0;margin-top:-16px}
+input[type=range]::-moz-range-track{height:14px;border-radius:7px;background:#34343a}
+input[type=range]::-moz-range-thumb{width:46px;height:46px;border-radius:50%;background:var(--acc);border:0}
+input[type=range]:focus{outline:none}
+</style>
+</head>
+<body>
+<div id="app">
+<div id="status">Gestoppt</div>
+<button id="go">START</button>
+<div class="card">
+<h2>Master <b id="vMaster"></b></h2>
+<input type="range" id="master" min="0" max="100">
+</div>
+<div class="card">
+<h2>Rauschen <b id="vNoise"></b></h2>
+<div class="chips" id="noiseType">
+<button data-v="white">White</button><button data-v="pink">Pink</button><button data-v="brown">Brown</button>
+</div>
+<input type="range" id="nv" min="0" max="100">
+</div>
+<div id="tones"></div>
+<div class="card">
+<h2>Timer</h2>
+<div class="chips" id="timer">
+<button data-v="15">15 Min</button><button data-v="30">30 Min</button><button data-v="60">60 Min</button>
+<button data-v="120">2 Std</button><button data-v="240">4 Std</button><button data-v="480">8 Std</button>
+<button data-v="0">Ohne Timer</button>
+</div>
+</div>
+<div class="card">
+<h2>Fadeout (nach Timer-Ende)</h2>
+<div class="chips" id="fade">
+<button data-v="10">10 Sek</button><button data-v="60">1 Min</button><button data-v="300">5 Min</button>
+<button data-v="600">10 Min</button><button data-v="1800">30 Min</button>
+</div>
+</div>
+</div>
+<script>
+(function(){
+var AC = window.AudioContext || window.webkitAudioContext;
+var S = {noise:'brown', nv:50, master:70, timer:60, fade:60,
+t:[{on:false,f:200,v:30},{on:false,f:210,v:30}], running:false, msg:'Gestoppt'};
+try{
+var sv = JSON.parse(localStorage.getItem('soundmix'));
+if(sv){ for(var k in sv){ S[k] = sv[k]; } }
+}catch(e){}
+S.running = false; S.msg = 'Gestoppt';
+var A = null, stopT = null, endAt = 0, fadeEnd = 0, wl = null;
+function $(id){ return document.getElementById(id); }
+function save(){ try{ var c = JSON.parse(JSON.stringify(S)); delete c.running; delete c.msg; localStorage.setItem('soundmix', JSON.stringify(c)); }catch(e){} }
+function curve(v){ return Math.pow(v/100, 2); }
+function xToF(x){ return Math.round(40Math.pow(50, x/1000)); }
+function fToX(f){ return Math.round(Math.log(f/40)/Math.log(50)1000); }
+/* ---------- Rauschen erzeugen (nahtlos loopend) ---------- /
+function makeNoise(ctx, type){
+var sr = ctx.sampleRate, N = Math.floor(sr6), F = Math.floor(sr0.5), L = N+F;
+var buf = ctx.createBuffer(2, N, sr);
+for(var c=0;c<2;c++){
+var raw = new Float32Array(L), i, w;
+var b0=0,b1=0,b2=0,b3=0,b4=0,b5=0,b6=0,last=0;
+for(i=0;i<L;i++){
+w = Math.random()2-1;
+if(type==='white'){ raw[i] = w; }
+else if(type==='pink'){
+b0=0.99886b0+w0.0555179; b1=0.99332b1+w0.0750759; b2=0.96900b2+w0.1538520;
+b3=0.86650b3+w0.3104856; b4=0.55000b4+w0.5329522; b5=-0.7616b5-w0.0168980;
+raw[i] = b0+b1+b2+b3+b4+b5+b6+w0.5362; b6 = w0.115926;
+} else { last = (last+0.02w)/1.02; raw[i] = last; }
+}
+var s=0; for(i=0;i<L;i++){ s += raw[i]raw[i]; }
+var g = 0.2/Math.sqrt(s/L);
+var d = buf.getChannelData(c);
+for(i=0;i<N;i++){ d[i] = raw[i]g; }
+for(i=0;i<F;i++){ var t=i/F; d[i] = raw[i]gMath.sin(tMath.PI/2) + raw[N+i]gMath.cos(tMath.PI/2); }
+}
+return buf;
+}
+/* ---------- Audio-Graph ---------- /
+function setp(p, v, tc, imm){
+if(imm || !A){ p.value = v; return; }
+try{ p.setTargetAtTime(v, A.ctx.currentTime, tc||0.03); }catch(e){ p.value = v; }
+}
+function build(){
+try{ if(navigator.audioSession){ navigator.audioSession.type = 'ambient'; } }catch(e){}
+var ctx = new AC();
+var o = {ctx:ctx, ng:{}, osc:[], tg:[]};
+o.fade = ctx.createGain(); o.fade.gain.value = 0;
+o.master = ctx.createGain();
+o.comp = ctx.createDynamicsCompressor();
+o.comp.threshold.value = -8; o.comp.ratio.value = 12; o.comp.attack.value = 0.003; o.comp.release.value = 0.2;
+o.mix = ctx.createGain();
+o.noiseGain = ctx.createGain();
+o.noiseGain.connect(o.mix);
+o.mix.connect(o.master); o.master.connect(o.fade); o.fade.connect(o.comp); o.comp.connect(ctx.destination);
+var types = ['white','pink','brown'];
+for(var i=0;i<3;i++){
+var src = ctx.createBufferSource();
+src.buffer = makeNoise(ctx, types[i]); src.loop = true;
+var g = ctx.createGain(); g.gain.value = (types[i]===S.noise)?1:0;
+src.connect(g); g.connect(o.noiseGain); src.start(0);
+o.ng[types[i]] = g;
+}
+for(var n=0;n<2;n++){
+var osc = ctx.createOscillator(); osc.type = 'sine'; osc.frequency.value = S.t[n].f;
+var tg = ctx.createGain(); tg.gain.value = 0;
+osc.connect(tg); tg.connect(o.mix); osc.start(0);
+o.osc.push(osc); o.tg.push(tg);
+}
+A = o;
+apply(true);
+}
+function apply(imm){
+if(!A) return;
+setp(A.master.gain, curve(S.master)0.9, 0.03, imm);
+setp(A.noiseGain.gain, curve(S.nv), 0.03, imm);
+for(var t in A.ng){ setp(A.ng[t].gain, t===S.noise?1:0, 0.05, imm); }
+for(var n=0;n<2;n++){
+setp(A.osc[n].frequency, S.t[n].f, 0.03, imm);
+setp(A.tg[n].gain, S.t[n].on ? curve(S.t[n].v)0.35 : 0, 0.03, imm);
+}
+}
+/* ---------- Start / Stopp / Timer ---------- /
+function tryResume(){ try{ if(A && A.ctx.state!=='running' && A.ctx.resume){ A.ctx.resume(); } }catch(e){} }
+function wake(){
+try{
+if(navigator.wakeLock && S.running && !wl){
+navigator.wakeLock.request('screen').then(function(l){ wl = l; l.addEventListener('release', function(){ wl = null; }); }).catch(function(){});
+}
+}catch(e){}
+}
+function unwake(){ try{ if(wl){ wl.release(); wl = null; } }catch(e){} }
+function armTimer(){
+endAt = S.timer>0 ? Date.now()+S.timer60000 : 0;
+fadeEnd = endAt ? endAt+S.fade1000 : 0;
+if(A){ setp(A.fade.gain, 1, 0.1); }
+}
+function start(){
+if(!AC){ alert('Dieser Browser unterstützt Web Audio nicht.'); return; }
+if(!A){ build(); }
+clearTimeout(stopT);
+S.running = true;
+try{ if(A.ctx.resume){ A.ctx.resume(); } }catch(e){}
+apply(); armTimer(); wake(); tick(); ui();
+}
+function stop(msg){
+S.running = false; S.msg = msg || 'Gestoppt';
+if(A){
+setp(A.fade.gain, 0, 0.06);
+stopT = setTimeout(function(){ if(!S.running){ try{ A.ctx.suspend(); }catch(e){} } }, 600);
+}
+unwake(); ui();
+}
+function fmt(ms){
+var s = Math.ceil(ms/1000);
+if(s<60) return s+' Sek';
+var m = Math.ceil(ms/60000);
+if(m>=60){ var h = Math.floor(m/60), mm = m%60; return h+' Std'+(mm?' '+mm+' Min':''); }
+return m+' Min';
+}
+function tick(){
+if(!S.running) return;
+if(A && A.ctx.state!=='running'){ tryResume(); }
+var now = Date.now(), txt = 'Läuft';
+if(endAt){
+if(now<endAt){ txt = 'Läuft - noch '+fmt(endAt-now); }
+else if(now<fadeEnd){
+var f = (fadeEnd-now)/(S.fade1000);
+setp(A.fade.gain, ff, 0.2);
+txt = 'Fadeout - noch '+fmt(fadeEnd-now);
+} else { stop('Timer abgelaufen - gestoppt'); return; }
+}
+S.msg = txt; $('status').textContent = txt;
+}
+setInterval(tick, 250);
+/* ---------- UI ---------- /
+function ui(){
+$('go').textContent = S.running ? 'STOPP' : 'START';
+$('go').className = S.running ? 'run' : '';
+$('status').textContent = S.msg;
+$('master').value = S.master; $('vMaster').textContent = S.master+'%';
+$('nv').value = S.nv; $('vNoise').textContent = S.nv+'%';
+mark('noiseType', S.noise); mark('timer', S.timer); mark('fade', S.fade);
+for(var n=0;n<2;n++){
+$('f'+n).value = fToX(S.t[n].f); $('fl'+n).textContent = S.t[n].f+' Hz';
+$('v'+n).value = S.t[n].v; $('vl'+n).textContent = S.t[n].v+'%';
+$('sw'+n).textContent = S.t[n].on ? 'AN' : 'AUS';
+$('sw'+n).className = 'sw'+(S.t[n].on?' on':'');
+}
+}
+function mark(id, val){
+var b = $(id).getElementsByTagName('button');
+for(var i=0;i<b.length;i++){ b[i].className = (b[i].getAttribute('data-v')==String(val)) ? 'sel' : ''; }
+}
+function chips(id, cb){
+var b = $(id).getElementsByTagName('button');
+for(var i=0;i<b.length;i++){
+(function(btn){ btn.addEventListener('click', function(){ cb(btn.getAttribute('data-v')); save(); ui(); }); })(b[i]);
+}
+}
+var tones = '';
+for(var n=0;n<2;n++){
+tones += '<div class="card"><div class="row"><h2>Sinus-Ton '+(n+1)+'</h2><button class="sw" id="sw'+n+'"></button></div>'
+'<label>Frequenz <b id="fl'+n+'"></b></label><input type="range" id="f'+n+'" min="0" max="1000">'
+'<label>Lautstärke <b id="vl'+n+'"></b></label><input type="range" id="v'+n+'" min="0" max="100"></div>';
+}
+$('tones').innerHTML = tones;
+function bindTone(n){
+$('sw'+n).addEventListener('click', function(){ S.t[n].on = !S.t[n].on; apply(); save(); ui(); });
+$('f'+n).addEventListener('input', function(){ S.t[n].f = xToF(+this.value); $('fl'+n).textContent = S.t[n].f+' Hz'; apply(); save(); });
+$('v'+n).addEventListener('input', function(){ S.t[n].v = +this.value; $('vl'+n).textContent = S.t[n].v+'%'; apply(); save(); });
+}
+bindTone(0); bindTone(1);
+$('master').addEventListener('input', function(){ S.master = +this.value; $('vMaster').textContent = S.master+'%'; apply(); save(); });
+$('nv').addEventListener('input', function(){ S.nv = +this.value; $('vNoise').textContent = S.nv+'%'; apply(); save(); });
+chips('noiseType', function(v){ S.noise = v; apply(); });
+chips('timer', function(v){ S.timer = +v; if(S.running){ armTimer(); } });
+chips('fade', function(v){ S.fade = +v; if(S.running && endAt){ fadeEnd = endAt+S.fade1000; } });
+$('go').addEventListener('click', function(){ if(S.running){ stop(); } else { start(); } });
+document.addEventListener('visibilitychange', function(){ if(!document.hidden && S.running){ tryResume(); wake(); } });
+document.addEventListener('touchstart', function(){ if(S.running){ tryResume(); } });
+/* Home-Bildschirm-Icon zur Laufzeit erzeugen /
+try{
+var c = document.createElement('canvas'); c.width = c.height = 180;
+var x = c.getContext('2d'); x.fillStyle = '#0b0b0c'; x.fillRect(0,0,180,180);
+x.strokeStyle = '#e0a050'; x.lineWidth = 10; x.lineCap = 'round'; x.beginPath();
+for(var i=0;i<=120;i++){
+var px = 30+i, py = 90+Math.sin(i/120Math.PI4)28Math.sin(i/120Math.PI);
+if(i){ x.lineTo(px,py); } else { x.moveTo(px,py); }
+}
+x.stroke();
+var l = document.createElement('link'); l.rel = 'apple-touch-icon'; l.href = c.toDataURL('image/png'); document.head.appendChild(l);
+}catch(e){}
+ui();
+})();
+</script>
+</body>
+</html>
